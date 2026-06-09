@@ -10,7 +10,7 @@ license: MIT
 metadata:
   hermes:
     tags: [self-improvement, reflection, continual-learning, meta-cognition]
-    related_skills: [archived-memory-recall, hermes-agent-skill-authoring, systematic-debugging, hierarchical-reasoning-model]
+    related_skills: [archived-memory-recall, hermes-agent-skill-authoring, systematic-debugging]
 references:
   - references/continual-learning-insights.md
   - references/skillopt-insights.md
@@ -96,6 +96,8 @@ SkillOpt 用 `<!-- SLOW_UPDATE_START -->` 和 `<!-- SLOW_UPDATE_END -->` 标记�
 
 ## 理论基础
 
+### 1. 持续学习 (Chen 2026)
+
 基于论文 "Never Stop Learning: A Survey of Continual Learning and Self-Iteration in LLMs" 的核心洞察：
 
 1. **自我改进必须有 verifier** (§4.1) — 没有验证信号的自我改进会退化 (model collapse)
@@ -107,6 +109,38 @@ SkillOpt 用 `<!-- SLOW_UPDATE_START -->` 和 `<!-- SLOW_UPDATE_END -->` 标记�
 - **低秩更新** = memory add / skill patch (小改动) 而非重写整个系统
 - **RAG** = MEMORY.md + archive/ (事实性知识不动参数)
 - **Replay** = 纠错信号的结构化重放
+
+### 2. 层级推理模型 HRM (Wang et al. 2025)
+
+> 论文: [Hierarchical Reasoning Model](https://arxiv.org/abs/2506.21734) (Sapient Intelligence)
+> 代码: https://github.com/sapientinc/HRM
+
+HRM 是脑启发式递迴架构，用两个耦合模块实现深度推理，**27M 参数 + 1000 样本即超越 CoT 大模型**。其设计原则直接映射到 agent 元学习：
+
+#### 核心原理 → Agent 映射
+
+| HRM 原理 | 机制 | Agent 元学习对应 |
+|---------|------|-----------------|
+| **层级处理** | 高层(慢/抽象) + 低层(快/细节) | Meta-Skill(反思策略) + 任务执行(具体观察) |
+| **层级收斂** | 低层週期性收斂→高层重置→新收斂阶段 | 观察缓冲区 + 週期性反思（防止 patch 湍流） |
+| **1-step gradient** | O(1) 记忆体，不展开完整历史 | Skill Patch（小改动），只记 pattern 不记流水帐 |
+| **Deep Supervision** | 多 forward pass + z.detach() 截断 | 频繁轻量检查点，不旧观察影响新判断 |
+| **ACT 自适应计算** | Q-learning 决定 halt/continue | 按任务复杂度决定反思深度（快想/慢想/深思） |
+| **PR 维度层级** | 高层 PR=89.95(高维/灵活) vs 低层 PR=30.22(低维/专门) | 知识抽象度分层：meta-skill ≠ 具体 skill |
+
+#### 关键数据
+
+- **架构**: 两个 encoder-only Transformer block (Llama 风格: RoPE, GLU, RMSNorm)
+- **参数**: 27M（两个模块各 ~12M + 嵌入/输出）
+- **训练**: 无预训练、无 CoT、仅 1000 样本
+- **成绩**: ARC-AGI 40.3% > o3-mini-high (34.5%), Sudoku/Maze 上 CoT 全军覆没 (0%) vs HRM 55-75%
+- **脑科学**: zH/zL PR 比值 ≈ 2.98，与小鼠皮质测量值 (~2.25) 吻合
+
+#### 最深洞见
+
+> **HRM 证明了深度推理不需要 CoT（外化语言），可以在潜在空间裡直接完成。**
+> 
+> 对 Agent 的启示：**最好的自我改进不需要写长篇反思日誌（外化记录），而是在知识结构内部形成抽象 pattern（潜在表徵），然后用这些 pattern 直接指导行为。**
 
 ## 核心循环：OODA-Reflect
 
@@ -351,33 +385,13 @@ Self-Improvement Protocol
   └─ 重放层 ─── session_search + memory-search (防遗忘)
 ```
 
-## HRM-Enhanced 进化层
+## HRM-Enhanced 进化层（实操指南）
 
-> 灵感来源: [Hierarchical Reasoning Model](https://arxiv.org/abs/2506.21734) (Wang et al. 2025)
-> HRM 用脑启发的双层递迴架构实现深度推理。Self-improvement protocol 可以同构映射。
-
-### 结构同构
-
-| HRM 概念 | Agent 元学习对应 | 进化方向 |
-|---------|----------------|---------|
-| 高层模组 zH (慢/抽象) | Meta-Skill + 反思策略 | 高维、灵活、可迁移 |
-| 低层模组 zL (快/细节) | 任务执行 + 具体观察 | 低维、专门化 |
-| 层级收敛 | Protected Regions + 渐进更新 | 防止 patch 湍流 |
-| 1-step gradient O(1) | Skill Patch (小改动) | 不追溯完整历史 |
-| Deep Supervision (detach) | 频繁轻量检查点 + 截断 | z.detach() → 不让旧观察影响新判断 |
-| ACT 自适应计算 | 按复杂度决定反思深度 | 快想/慢想/深思 |
-| PR 维度层级 | 知识抽象度分层 | 高层知识 ≠ 低层知识 |
+> HRM 理论基础见上方「理论基础 → 层级推理模型 HRM」章节。以下是实操落地方案。
 
 ### 层级收敛 → Skill 更新节奏
 
-HRM 的核心洞察: 标准 RNN 过早收敛，后续步骤失效。
-
-Agent 的对应问题:
-- 反思太频繁 → 过拟合琐碎细节
-- 反思太稀疏 → 遗忘关键信号
-- Skill patch 太多 → 文档退化
-
-**收敛策略**: 反思周期 = 高层周期 (N)，每周期内的观察 = 低层步骤 (T)
+反思周期 = 高层周期 (N)，每周期内的观察 = 低层步骤 (T)：
 
 ```
 反思周期 k:
